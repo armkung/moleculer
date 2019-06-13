@@ -6,10 +6,10 @@
 
 "use strict";
 
-const { defaultsDeep } 	= require("lodash");
-const chalk				= require("chalk");
-const Promise			= require("bluebird");
-const Transporter 		= require("./base");
+const { defaultsDeep } = require("lodash");
+const chalk = require("chalk");
+const Promise = require("bluebird");
+const Transporter = require("./base");
 
 /**
  * Lightweight transporter for Kafka
@@ -25,7 +25,6 @@ const Transporter 		= require("./base");
  * @extends {Transporter}
  */
 class KafkaTransporter extends Transporter {
-
 	/**
 	 * Creates an instance of KafkaTransporter.
 	 *
@@ -35,14 +34,20 @@ class KafkaTransporter extends Transporter {
 	 */
 	constructor(opts) {
 		if (typeof opts === "string") {
-			opts = { kafkaHost: opts.replace("kafka://", "") };
+			opts = {
+				clientId: "app",
+				brokers: [opts.replace("kafka://", "")]
+			};
 		} else if (opts == null) {
 			opts = {};
 		}
 
 		super(opts);
 
-		this.client = null;
+		const Kafka = require("kafkajs").Kafka;
+
+		this.kafka = new Kafka(opts);
+
 		this.producer = null;
 		this.consumer = null;
 	}
@@ -52,67 +57,21 @@ class KafkaTransporter extends Transporter {
 	 *
 	 * @memberof KafkaTransporter
 	 */
-	connect() {
-		this.logger.warn(chalk.yellow.bold("Kafka Transporter is an EXPERIMENTAL transporter. Do NOT use it in production yet!"));
+	async connect() {
+		try {
+			this.producer = this.kafka.producer();
 
-		return new Promise((resolve, reject) => {
-			let Kafka;
-			try {
-				Kafka = require("kafka-node");
-			} catch(err) {
-				/* istanbul ignore next */
-				this.broker.fatal("The 'kafka-node' package is missing. Please install it with 'npm install kafka-node --save' command.", err, true);
-			}
+			await this.producer.connect();
 
-			this.client = new Kafka.KafkaClient(this.opts);
-			this.client.once("connect", () => {
-				/* Moved to ConsumerGroup
-				// Create Consumer
+			this.logger.info("Kafka client is connected.");
 
-				this.consumer = new Kafka.Consumer(this.client, this.opts.consumerPayloads || [], this.opts.consumer);
+			await this.onConnected();
+		} catch (err) {
+			this.logger.error("Kafka Client error", err.message);
+			this.logger.debug(err);
 
-				this.consumer.on("error", e => {
-					this.logger.error("Kafka Consumer error", e.message);
-					this.logger.debug(e);
-
-					if (!this.connected)
-						reject(e);
-				});
-
-				this.consumer.on("message", message => {
-					const topic = message.topic;
-					const cmd = topic.split(".")[1];
-					console.log(cmd);
-					this.incomingMessage(cmd, message.value);
-				});*/
-
-
-				// Create Producer
-				this.producer = new Kafka.Producer(this.client, this.opts.producer, this.opts.customPartitioner);
-				/* istanbul ignore next */
-				this.producer.on("error", e => {
-					this.logger.error("Kafka Producer error", e.message);
-					this.logger.debug(e);
-
-					if (!this.connected)
-						reject(e);
-				});
-
-				this.logger.info("Kafka client is connected.");
-
-				this.onConnected().then(resolve);
-			});
-
-			/* istanbul ignore next */
-			this.client.on("error", e => {
-				this.logger.error("Kafka Client error", e.message);
-				this.logger.debug(e);
-
-				if (!this.connected)
-					reject(e);
-			});
-
-		});
+			if (!this.connected) return Promise.reject(err);
+		}
 	}
 
 	/**
@@ -120,19 +79,9 @@ class KafkaTransporter extends Transporter {
 	 *
 	 * @memberof KafkaTransporter
 	 */
-	disconnect() {
-		if (this.client) {
-			this.client.close(() => {
-				this.client = null;
-				this.producer = null;
-
-				if (this.consumer) {
-					this.consumer.close(() => {
-						this.consumer = null;
-					});
-				}
-			});
-		}
+	async disconnect() {
+		this.producer = null;
+		this.consumer = null;
 	}
 
 	/**
@@ -142,49 +91,32 @@ class KafkaTransporter extends Transporter {
 	 *
 	 * @memberof BaseTransporter
 	 */
-	makeSubscriptions(topics) {
-		topics = topics.map(({ cmd, nodeID }) => this.getTopicName(cmd, nodeID));
+	async makeSubscriptions(topics) {
+		try {
+			this.consumer = this.kafka.consumer({ groupId: this.nodeID });
 
-		return new Promise((resolve, reject) => {
+			await this.consumer.connect();
+			await Promise.all(
+				topics.map(({ cmd, nodeID }) => {
+					return this.consumer.subscribe({
+						topic: this.getTopicName(cmd, nodeID),
+						fromBeginning: false
+					});
+				})
+			);
 
-			this.producer.createTopics(topics, true, (err) => {
-				/* istanbul ignore next */
-				if (err) {
-					this.logger.error("Unable to create topics!", topics, err);
-					return reject(err);
-				}
-
-				const consumerOptions = Object.assign({
-					id: "default-kafka-consumer",
-					host: this.opts.host,
-					groupId: this.nodeID,
-					fromOffset: "latest",
-					encoding: "buffer",
-				}, this.opts.consumer);
-
-				const Kafka = require("kafka-node");
-				this.consumer = new Kafka.ConsumerGroup(consumerOptions, topics);
-
-				/* istanbul ignore next */
-				this.consumer.on("error", e => {
-					this.logger.error("Kafka Consumer error", e.message);
-					this.logger.debug(e);
-
-					if (!this.connected)
-						reject(e);
-				});
-
-				this.consumer.on("message", message => {
-					const topic = message.topic;
+			await this.consumer.run({
+				eachMessage: async ({ topic, message }) => {
 					const cmd = topic.split(".")[1];
 					this.incomingMessage(cmd, message.value);
-				});
-
-				this.consumer.on("connect", () => {
-					resolve();
-				});
+				}
 			});
-		});
+		} catch (err) {
+			this.logger.error("Kafka Consumer error", err.message);
+			this.logger.debug(err);
+
+			if (!this.connected) return Promise.reject(err);
+		}
 	}
 
 	/**
@@ -226,29 +158,25 @@ class KafkaTransporter extends Transporter {
 	 *
 	 * @memberof KafkaTransporter
 	 */
-	publish(packet) {
+	async publish(packet) {
 		/* istanbul ignore next */
 		if (!this.producer) return Promise.resolve();
 
-		return new Promise((resolve, reject) => {
+		try {
 			const data = this.serialize(packet);
 			this.incStatSent(data.length);
-			this.producer.send([{
-				topic: this.getTopicName(packet.type, packet.target),
-				messages: [data],
-				partition: this.opts.publish.partition,
-				attributes: this.opts.publish.attributes,
-			}], (err) => {
-				/* istanbul ignore next */
-				if (err) {
-					this.logger.error("Publish error", err);
-					reject(err);
-				}
-				resolve();
-			});
-		});
-	}
 
+			await this.producer.send({
+				topic: this.getTopicName(packet.type, packet.target),
+				messages: [data]
+			});
+		} catch (err) {
+			this.logger.error("Kafka Publish error", err.message);
+			this.logger.debug(err);
+
+			if (!this.connected) return Promise.reject(err);
+		}
+	}
 }
 
 module.exports = KafkaTransporter;
