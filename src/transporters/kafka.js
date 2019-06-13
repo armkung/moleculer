@@ -35,35 +35,10 @@ class KafkaTransporter extends Transporter {
 	 */
 	constructor(opts) {
 		if (typeof opts === "string") {
-			opts = { host: opts.replace("kafka://", "") };
+			opts = { kafkaHost: opts.replace("kafka://", "") };
 		} else if (opts == null) {
 			opts = {};
 		}
-
-		opts = defaultsDeep(opts, {
-			host: undefined,
-
-			// KafkaClient options. More info: https://github.com/SOHU-Co/kafka-node#clientconnectionstring-clientid-zkoptions-noackbatchoptions-ssloptions
-			client: {
-				zkOptions: undefined,
-				noAckBatchOptions: undefined,
-				sslOptions: undefined,
-			},
-
-			// KafkaProducer options. More info: https://github.com/SOHU-Co/kafka-node#producerclient-options-custompartitioner
-			producer: {},
-			customPartitioner: undefined,
-
-			// ConsumerGroup options. More info: https://github.com/SOHU-Co/kafka-node#consumergroupoptions-topics
-			consumer: {
-			},
-
-			// Advanced options for `send`. More info: https://github.com/SOHU-Co/kafka-node#sendpayloads-cb
-			publish: {
-				partition: 0,
-				attributes: 0
-			}
-		});
 
 		super(opts);
 
@@ -89,7 +64,7 @@ class KafkaTransporter extends Transporter {
 				this.broker.fatal("The 'kafka-node' package is missing. Please install it with 'npm install kafka-node --save' command.", err, true);
 			}
 
-			this.client = new Kafka.Client(this.opts.host,  this.opts.client.zkOptions, this.opts.client.noAckBatchOptions, this.opts.client.sslOptions);
+			this.client = new Kafka.KafkaClient(this.opts);
 			this.client.once("connect", () => {
 				/* Moved to ConsumerGroup
 				// Create Consumer
