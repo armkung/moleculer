@@ -86,8 +86,8 @@ class EndpointList {
 	 * @returns
 	 * @memberof EndpointList
 	 */
-	select(list) {
-		const ret = this.strategy.select(list);
+	select(list, opts) {
+		const ret = this.strategy.select(list, opts);
 		if (!ret) {
 			/* istanbul ignore next */
 			throw new MoleculerServerError("Strategy returned an invalid endpoint.", 500, "INVALID_ENDPOINT", { strategy: typeof(this.strategy) });
@@ -101,7 +101,7 @@ class EndpointList {
 	 * @returns
 	 * @memberof EndpointList
 	 */
-	next() {
+	next(opts) {
 		// No items
 		if (this.endpoints.length === 0) {
 			return null;
@@ -109,7 +109,7 @@ class EndpointList {
 
 		// If internal (service), return the local always
 		if (this.internal && this.hasLocal()) {
-			return this.nextLocal();
+			return this.nextLocal(opts);
 		}
 
 		// Only 1 item
@@ -124,7 +124,7 @@ class EndpointList {
 
 		// Search local item
 		if (this.registry.opts.preferLocal === true && this.hasLocal()) {
-			const ep = this.nextLocal();
+			const ep = this.nextLocal(opts);
 			if (ep && ep.isAvailable)
 				return ep;
 		}
@@ -133,7 +133,7 @@ class EndpointList {
 		if (epList.length == 0)
 			return null;
 
-		return this.select(epList);
+		return this.select(epList, opts);
 	}
 
 	/**
@@ -142,7 +142,7 @@ class EndpointList {
 	 * @returns
 	 * @memberof EndpointList
 	 */
-	nextLocal() {
+	nextLocal(opts) {
 		// No items
 		if (this.localEndpoints.length === 0) {
 			return null;
@@ -162,7 +162,7 @@ class EndpointList {
 		if (epList.length == 0)
 			return null;
 
-		return this.select(epList);
+		return this.select(epList, opts);
 	}
 
 	/**
